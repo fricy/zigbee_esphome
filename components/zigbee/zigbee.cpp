@@ -7,6 +7,7 @@
 #include "esphome/core/application.h"
 #include "esphome/core/log.h"
 #include "zigbee_helpers.h"
+#include "esp_task_wdt.h"
 #ifdef CONFIG_WIFI_COEX
 #include "esp_coexist.h"
 #endif
@@ -66,11 +67,7 @@ bool ZigBeeComponent::app_signal_handler(const ezb_app_signal_t *app_signal) {
   switch (signal_type) {
     case EZB_ZDO_SIGNAL_SKIP_STARTUP:
       ESP_LOGD(TAG, "Zigbee stack initialized");
-      if (ezb_bdb_is_factory_new()) {
-        global_zigbee->defer([]() { global_zigbee->setup_reporting(); });
-      } else {
-        ezb_bdb_start_top_level_commissioning(EZB_BDB_MODE_INITIALIZATION);
-      }
+      ezb_bdb_start_top_level_commissioning(EZB_BDB_MODE_INITIALIZATION);
       break;
     case EZB_BDB_SIGNAL_DEVICE_FIRST_START:
       // Device started for the first time after the NVRAM erase
@@ -526,11 +523,18 @@ void ZigBeeComponent::setup() {
   }
 
   // ------------------------------ Register Device ------------------------------
+  ESP_LOGW(TAG, "Registering device (heap: %lu)...", (unsigned long) esp_get_free_heap_size());
+  uint32_t reg_start = esp_log_timestamp();
+  esp_task_wdt_delete(xTaskGetCurrentTaskHandle());
   if (ezb_af_device_desc_register(this->dev_desc_) != EZB_ERR_NONE) {
     ESP_LOGE(TAG, "Could not register the endpoint list");
+    esp_task_wdt_add(xTaskGetCurrentTaskHandle());
     this->mark_failed();
     return;
   }
+  ESP_LOGW(TAG, "Device registered in %lums (heap: %lu)",
+           (unsigned long) (esp_log_timestamp() - reg_start),
+           (unsigned long) esp_get_free_heap_size());
 
   ezb_zcl_core_action_handler_register(zb_action_handler);
 
@@ -539,6 +543,30 @@ void ZigBeeComponent::setup() {
     this->mark_failed();
     return;
   }
+
+  // Configure reporting before ZB task starts (no lock needed, single-threaded).
+  // Mirrors v1.x init order: all reporting is set up pre-mainloop so the ZB
+  // task's internal initialization of 14 EPs / 105 attrs can't starve loopTask.
+  int rpt_total = this->attributes_.size();
+  ESP_LOGW(TAG, "Setting up reporting for %d attributes (heap: %lu)",
+           rpt_total, (unsigned long) esp_get_free_heap_size());
+  uint32_t rpt_start = esp_log_timestamp();
+  int rpt_count = 0;
+  for (auto &[_, attribute] : this->attributes_) {
+    uint32_t attr_start = esp_log_timestamp();
+    attribute->setup_reporting();
+    rpt_count++;
+    uint32_t attr_ms = esp_log_timestamp() - attr_start;
+    if (rpt_count <= 3 || rpt_count % 20 == 0 || attr_ms > 500) {
+      ESP_LOGD(TAG, "  attr %d/%d: %lums (heap: %lu)",
+               rpt_count, rpt_total, (unsigned long) attr_ms,
+               (unsigned long) esp_get_free_heap_size());
+    }
+  }
+  ESP_LOGW(TAG, "Reporting done: %d attrs in %lums (heap: %lu)",
+           rpt_count, (unsigned long) (esp_log_timestamp() - rpt_start),
+           (unsigned long) esp_get_free_heap_size());
+  esp_task_wdt_add(xTaskGetCurrentTaskHandle());
 
 #ifdef CONFIG_FREERTOS_USE_TICKLESS_IDLE
   ESP_LOGD(TAG, "Enabling Zigbee Sleepy End Device: %s", this->sleepy_ ? "enabled" : "disabled");
