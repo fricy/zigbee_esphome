@@ -286,8 +286,12 @@ def final_validate(config):
                     "Add \n'zb_fct, data, fat, , 1K,'\n to your custom partition table."
                 )
     if CONF_WIFI in fv.full_config.get():
-        if CONF_AP in fv.full_config.get()[CONF_WIFI]:
-            raise cv.Invalid("Wifi Access Point cannot be used with Zigbee.")
+        if CONF_AP in fv.full_config.get()[CONF_WIFI] and not config.get(CONF_SLEEPY):
+            raise cv.Invalid(
+                "Wifi Access Point can only be used with Zigbee in sleepy end device mode: "
+                "set 'sleepy: true' (and 'router: false'). An always listening Zigbee device "
+                "leaves the shared radio no time to serve Access Point clients."
+            )
         if config[CONF_ROUTER]:
             _LOGGER.warning(
                 "The Zigbee Router might miss packets while Wifi is active and could destabilize "

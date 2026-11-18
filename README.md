@@ -30,7 +30,7 @@ This is tested on ESP32-H2 and ESP32-C6, however, is in theory also compatible w
 - Time sync with coordinator
 - Custom clusters and attributes
 - (normal, binary, text) sensors, switches and lights can be connected to attributes without need for lambdas/actions
-- Wifi co-existence on ESP32-C6 and ESP32-C5
+- Wifi co-existence on ESP32-C6 and ESP32-C5 (Wifi access point only with `sleepy: true`, see limitations)
 - Deep-sleep should work
 - Not tested: groups
 - Time sync with coordinator
@@ -43,6 +43,7 @@ This is tested on ESP32-H2 and ESP32-C6, however, is in theory also compatible w
 - Attribute OnValue trigger works only with numeric types
 - Reporting can be enabled, but not configured
 - No control devices like switches ([workaround](https://github.com/luar123/zigbee_esphome/discussions/18#discussioncomment-11875376))
+- Wifi access point (softAP) is only supported together with `sleepy: true` (end device), see `example_wifiAP_ota.yaml`. Zigbee and Wifi share one radio and an always listening Zigbee receiver leaves the access point no radio time: in tests the access point was visible, but clients could not connect. Commands to a sleepy device are delayed by up to `keep_alive`
 - Needs esp-idf >=5.5.4
 - Needs esphome >=2026.6
 - scenes not implemented
@@ -90,6 +91,8 @@ zigbee:
 - **version** (Optional, int): Zigbee App Version in basic cluster. Defaults to `0`
 - **area** (Optional, int): Zigbee Physical Environment in basic cluster. See ZCL. Defaults to `0` = unknown
 - **router** (Optional, bool): Create a router device instead of an end device. Defaults to `false`
+- **sleepy** (Optional, bool): Create a sleepy end device: the receiver is switched off between transmissions and messages from the coordinator are fetched by polling the parent every `keep_alive` ms. Needed to run a Wifi access point (see limitations). Can not be combined with `router: true`. Defaults to `false`
+- **keep_alive** (Optional, int): Poll interval of the end device in ms (100 - 65535). A message for a sleepy device waits at most this long. Defaults to `3000`
 - **device_version** (Optional, int): Set the Home Automation Profile device version. Custom values might be needed for compatibility with some vendors. Defaults to `0`
 - ~~**trust_center_key** (Optional, bind_key): Set custom trust center key. 32 digits hex number.~~ Not yet supported
 - **debug** (Optional, bool): Print zigbee stack debug messages. Defaults to `false`

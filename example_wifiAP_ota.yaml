@@ -1,0 +1,120 @@
+# Example: Wifi access point (softAP) for OTA updates next to Zigbee.
+#
+# Zigbee and Wifi share one radio. An always listening Zigbee device leaves the
+# access point no radio time (the access point is visible, but clients can not
+# connect), so the access point needs a sleepy end device:
+#   zigbee: sleepy: true  (and router: false)
+# A sleepy end device polls its parent every keep_alive ms, so commands from the
+# coordinator wait at most that long.
+#
+# The access point is off after boot. Hold the button for 2 .. 5 s to switch it
+# on or off, join it and upload to 192.168.4.1 with esphome (OTA) or with the
+# web server page.
+
+esphome:
+  name: ota-demo
+
+external_components:
+  - source: components
+    components: [zigbee]
+
+esp32:
+  board: esp32-c6-devkitc-1
+  framework:
+    type: esp-idf
+
+logger:
+
+wifi:
+  # Access point only (no station network), off after boot.
+  enable_on_boot: false
+  # MUST be 0s while Wifi is disabled: the default (15 min) would reboot the device.
+  reboot_timeout: 0s
+  # Address used to upload to the access point (it is also the default address
+  # of the access point).
+  use_address: 192.168.4.1
+  ap:
+    ssid: esphome-OTA
+    password: !secret wifi_ap_password  # at least 8 characters
+    # Choose the Wifi channel furthest from your Zigbee channel:
+    # Wifi 1 overlaps Zigbee 11-14, Wifi 6 overlaps 16-19, Wifi 11 overlaps 21-24.
+    channel: 11
+
+# Using both OTA platforms is optional, use only the one you need:
+# esphome uploads from the dashboard or the command line, web_server uploads
+# from the web page below. Both reboot the device after a successful update.
+ota:
+  - platform: esphome
+    password: !secret ota_password
+  - platform: web_server
+
+web_server:
+  port: 80
+  # Embed the UI in the firmware: the access point has no internet access, so
+  # the default (JS/CSS from oi.esphome.io) would never load. Costs flash.
+  local: true
+  auth:
+    type: digest
+    username: admin
+    password: !secret web_password
+
+zigbee:
+  id: zb
+  router: false
+  sleepy: true
+  # Poll interval of the sleepy end device in ms (100 - 65535, default 3000).
+  # A command from the coordinator waits at most this long: lower means a faster
+  # response, but more radio activity. In tests with a mains powered ESP32-C6
+  # the mean delay was about 0.3 s at 500 ms and about 1.4 s at 3000 ms.
+  keep_alive: 1000
+  on_join:
+    then:
+      - logger.log: "Joined Zigbee network"
+
+binary_sensor:
+  - platform: gpio
+    id: manual_button
+    name: "Manual Button"
+    internal: true
+    pin:
+      number: GPIOXX  # pin of your button
+      mode:
+        input: true
+        pullup: true
+      inverted: true
+    filters:
+      - delayed_on: 30ms
+      - delayed_off: 30ms
+    on_click:
+      # < 2 s: report all attributes
+      - min_length: 50ms
+        max_length: 1990ms
+        then:
+          - zigbee.report: zb
+          - logger.log: "Button short push"
+      # 2 .. 5 s: switch the Wifi access point on or off
+      - min_length: 2000ms
+        max_length: 4990ms
+        then:
+          - if:
+              condition:
+                wifi.enabled:
+              then:
+                - logger.log: "Disabling Wifi AP"
+                - wifi.disable:
+              else:
+                - logger.log: "Enabling Wifi AP"
+                - wifi.enable:
+      # 5 .. 10 s: reboot
+      - min_length: 5000ms
+        max_length: 9990ms
+        then:
+          - logger.log: "Reboot requested by button hold"
+          - delay: 300ms
+          - lambda: 'App.safe_reboot();'
+      # >= 10 s: leave the Zigbee network and start re-pairing
+      - min_length: 10000ms
+        max_length: 20000ms
+        then:
+          - logger.log: "Zigbee reset requested by button hold"
+          - zigbee.reset: zb
